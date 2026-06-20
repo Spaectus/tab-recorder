@@ -1,0 +1,19 @@
+# IDE / editor
+.claude/
+mcps/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Dependencies
+node_modules/
+
+# Build / temp
+*.log
+*.tmp
