@@ -1,18 +1,29 @@
 {
   "manifest_version": 3,
   "name": "Tab Audio Recorder",
-  "version": "2.0",
+  "version": "2.1.0",
   "description": "Records the audio of a chosen tab to a crash-safe WebM/Opus file.",
   "permissions": [
     "tabCapture",
     "offscreen",
     "storage",
-    "tabs"
+    "tabs",
+    "notifications"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_popup": "ui.html"
+    "default_popup": "ui.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
   }
 }

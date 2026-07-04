@@ -2,7 +2,7 @@
 
 Chrome Manifest V3 extension that records the audio output of a browser tab and saves it as a **WebM/Opus** file to a location you choose. Recording is **crash-safe**: the file is flushed to disk every ~10 seconds, so a crash loses at most a few seconds of audio.
 
-An optional **M4A (AAC)** copy can be saved on Stop & Save for players that prefer MPEG-4.
+An **M4A (AAC)** copy is saved automatically alongside the WebM — under the same base name, chosen once at start — whenever the recording ends: manual Stop & Save, the recorded tab closing, or even an error mid-recording.
 
 ## Features
 
@@ -12,7 +12,7 @@ An optional **M4A (AAC)** copy can be saved on Stop & Save for players that pref
 - **Live waveform & timer** — 10-band frequency display and elapsed time (paused time excluded)
 - **Auto-pause** — follows the tab's speaker icon (`tab.audible`); pauses when the tab goes silent, resumes when it plays again
 - **Mute playback** — silence local monitoring without affecting what gets recorded
-- **Optional M4A export** — live `audio/mp4` encoding during recording, with a WebCodecs fallback on older Chrome
+- **Automatic M4A export** — live `audio/mp4` encoding during recording, written on every end of recording (with a WebCodecs fallback on older Chrome)
 - **Toolbar badge** — `REC` / `II` / `…` / `!` so state is visible without opening the popup
 
 ## Requirements
@@ -30,13 +30,13 @@ An optional **M4A (AAC)** copy can be saved on Stop & Save for players that pref
 ## Usage
 
 1. Play audio in the tab you want to record.
-2. Click the extension icon → **Start Recording**.
-3. Pick where to save the `.webm` file (suggested name: `recording_<timestamp>.webm`).
-4. Confirm the file grows on disk within ~10 s, the waveform animates, the timer counts, and you still hear the tab.
+2. Click the extension icon, optionally type a recording name (default: `recording_<timestamp>`), then click **Start Recording**.
+3. Pick the folder to save into. Both `<name>.webm` and `<name>.m4a` are created there up front.
+4. Confirm the `.webm` grows on disk within ~10 s, the waveform animates, the timer counts, and you still hear the tab.
 5. Use **Pause**, **Auto-pause**, or **Mute playback** as needed.
 6. Optionally click **Pop out** to keep the UI visible in a separate window.
-7. Click **Stop & Save** when finished. If prompted, choose whether to also save an M4A copy and pick a `.m4a` location.
-8. Open the `.webm` (and `.m4a` if saved) in Chrome, VLC, or another player to verify playback.
+7. Click **Stop & Save** when finished — both files are finalized automatically, no further prompts.
+8. Open the `.webm` and `.m4a` in Chrome, VLC, or another player to verify playback.
 
 ### Which tab gets recorded?
 
@@ -76,14 +76,15 @@ While recording or paused, a second line shows `Recording: <tab title> · HH:MM:
 | Error | `!` | red |
 | Idle | *(cleared)* | — |
 
-## Optional M4A export
+## Automatic M4A export
 
-On **Stop & Save**, a `confirm()` dialog asks whether to also save an M4A copy. The WebM is always saved; M4A is extra.
+The `.m4a` destination is created at **start**, in the same folder and under the same base name as the `.webm`. When the recording ends — for any reason — the M4A is written automatically, with no dialog.
 
 1. **During recording**, a second `MediaRecorder` encodes the same stream to `audio/mp4;codecs=mp4a.40.2` (AAC-LC, 128 kbps) and buffers chunks. It runs **continuously** and is never paused — MP4 tolerates pause/resume gaps poorly, and a complete file matters more than mirroring the WebM's skipped spans.
-2. If you accept M4A, the popup opens a second save picker for `.m4a` under the click's user gesture. The handle is stored in IndexedDB under a separate key (`m4aFileHandle`).
-3. The offscreen engine finalizes the WebM, then writes the buffered `audio/mp4` blob (or runs the fallback) to the chosen file.
-4. If M4A fails, the WebM remains intact and the error is shown in the UI.
+2. The `.m4a` handle is created via the directory picked at start and stored in IndexedDB under a separate key (`m4aFileHandle`).
+3. On **Stop & Save** (or tab close), the offscreen engine finalizes the WebM, then writes the buffered `audio/mp4` blob (or runs the fallback) to the `.m4a`.
+4. **On an error mid-recording** (e.g. write permission lost after a very long pause), the engine still flushes the M4A recorder and writes whatever was captured so far to the `.m4a` before reporting the error, so the audio is not lost.
+5. If the M4A write fails, the WebM remains intact and the error is shown in the UI.
 
 **Fallback path:** when live `audio/mp4` recording is unsupported, the engine decodes the WebM to PCM and re-encodes to AAC via WebCodecs `AudioEncoder` + the bundled [mp4-muxer](mp4-muxer.mjs) ([m4a.js](m4a.js)). A dedicated `converting` status is shown while this runs.
 
@@ -112,7 +113,7 @@ Three message vocabularies share `chrome.runtime`: UI uses `{ cmd }`, background
 
 **Stale-state recovery:** on install and browser startup, if storage says `recording` or `paused` but no offscreen document exists, the service worker resets to idle. This prevents a wedged "Stop & Save" UI after an extension reload or service-worker sleep.
 
-**File handles:** `showSaveFilePicker()` returns a `FileSystemFileHandle` that cannot cross extension message boundaries. The UI stores handles in IndexedDB ([idb.js](idb.js)); the offscreen engine reads them back.
+**File handles:** the UI calls `showDirectoryPicker()` once at start and creates `<name>.webm` and `<name>.m4a` in the chosen folder. `FileSystemHandle`s cannot cross extension message boundaries, so the UI stores the directory + both file handles in IndexedDB ([idb.js](idb.js)); the offscreen engine reads them back. A later click (pause/stop) re-requests write permission on the **directory**, covering both files at once.
 
 ### Recording pipeline
 
@@ -120,14 +121,14 @@ Three message vocabularies share `chrome.runtime`: UI uses `{ cmd }`, background
 tab stream ─┬─> AudioContext.destination   (keeps the tab audible — tabCapture mutes it otherwise)
             └─> AnalyserNode               (waveform)
 tab stream ───> MediaRecorder(webm/opus)   (primary encode, off main thread)
-tab stream ───> MediaRecorder(audio/mp4)   (optional M4A buffer, when supported)
+tab stream ───> MediaRecorder(audio/mp4)   (live M4A buffer, when supported)
 ```
 
 1. `getUserMedia` with `chromeMediaSource: 'tab'`.
 2. Web Audio graph for local playback and waveform analysis.
 3. `MediaRecorder` at 128 kbps, `start(1000)` — one chunk per second.
 4. **Commit** every 10 s: `Blob(chunks)` → `createWritable({ keepExistingData: false })` → `write` → **`close()`**.
-5. **Stop:** final chunk, final commit, optional M4A write, teardown, offscreen document closed.
+5. **Stop:** final chunk, final commit, automatic M4A write, teardown, offscreen document closed.
 
 ### Auto-pause
 
@@ -148,7 +149,8 @@ Disconnects `source` from `AudioContext.destination` only. The `MediaRecorder` a
 
 ```
 tab-recorder/
-├── manifest.json      MV3 manifest (tabCapture, offscreen, storage, tabs)
+├── manifest.json      MV3 manifest (tabCapture, offscreen, storage, tabs) — version source of truth
+├── CHANGELOG.md       Version history (popup shows the manifest version)
 ├── background.js      Service worker: routing, storage, offscreen lifecycle
 ├── offscreen.html     Offscreen document shell
 ├── offscreen.js       Recording engine
@@ -169,7 +171,7 @@ tab-recorder/
 
 1. Load unpacked (see [Installation](#installation)).
 2. Record a tab; verify waveform, timer, pause/resume, auto-pause, mute, and pop-out.
-3. Stop & Save with and without M4A.
+3. Stop & Save; confirm both `<name>.webm` and `<name>.m4a` appear in the chosen folder with no extra prompt.
 4. Crash test: kill Chrome mid-recording; confirm the file plays up to the last commit.
 
 ### Automated M4A tests

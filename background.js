@@ -70,7 +70,8 @@ async function handleCmd(msg, sendResponse) {
       case 'stop':
         // If the engine is gone (stale state), there's nothing to forward to —
         // reset directly so the user isn't stuck on a dead "Stop & Save".
-        if (await hasOffscreen()) await forward('stopRecordingOffscreen', { m4a: !!msg.m4a });
+        // M4A defaults to on: the destination was created at start.
+        if (await hasOffscreen()) await forward('stopRecordingOffscreen', { m4a: msg.m4a !== false });
         else await resetToIdle();
         break;
       case 'pause':        await forward('pauseRecordingOffscreen');      break;
@@ -134,6 +135,11 @@ async function handleEvt(msg) {
     case 'status':
       await chrome.storage.local.set({ status: msg.status, error: msg.error || '' });
       updateBadge(msg.status);
+      if (msg.status === 'error') {
+        await showNotification('tab-recorder-error', msg.error, 2);
+      } else if (msg.status === 'idle') {
+        await showSavedNotification(msg);
+      }
       if (msg.status === 'idle' || msg.status === 'error') {
         pendingStart = null;
         await chrome.storage.session.remove(['waveform', 'elapsedMs']);
@@ -176,6 +182,28 @@ async function closeOffscreen() {
 async function setError(message) {
   await chrome.storage.local.set({ status: 'error', error: message });
   updateBadge('error');
+  await showNotification('tab-recorder-error', message, 2);
+}
+
+async function showSavedNotification(msg) {
+  const { tabTitle } = await chrome.storage.local.get('tabTitle');
+  let text = 'Recording saved';
+  if (tabTitle) text += ` — ${tabTitle}`;
+  if (msg.m4a) text += ' (WebM + M4A)';
+  await showNotification('tab-recorder-saved', text);
+}
+
+async function showNotification(id, message, priority = 1) {
+  if (!message) return;
+  try {
+    await chrome.notifications.create(id, {
+      type: 'basic',
+      iconUrl: 'icon48.png',
+      title: 'Tab Audio Recorder',
+      message: String(message).slice(0, 240),
+      priority
+    });
+  } catch { /* notifications unavailable or permission denied */ }
 }
 
 // If the tab being recorded is closed, finalize & save what we have.
