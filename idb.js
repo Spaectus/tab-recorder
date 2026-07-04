@@ -6,8 +6,12 @@ const DB_NAME = 'tab-recorder';
 const STORE   = 'handles';
 const KEY     = 'fileHandle';
 
-// Separate slot for the optional M4A destination, chosen at Stop & Save time.
+// Separate slot for the M4A destination, created alongside the WebM at start.
 export const M4A_KEY = 'm4aFileHandle';
+
+// The destination directory, kept so a later user gesture (pause/stop click)
+// can re-request write permission for both files at once.
+export const DIR_KEY = 'dirHandle';
 
 function openDB() {
   return new Promise((resolve, reject) => {

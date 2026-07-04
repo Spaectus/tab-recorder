@@ -3,12 +3,13 @@
 // it renders whatever the engine reports in chrome.storage.local, and polls
 // chrome.storage.session for the live waveform/timer.
 
-import { storeHandle, M4A_KEY } from './idb.js';
+import { storeHandle, getHandle, M4A_KEY, DIR_KEY } from './idb.js';
 
 const isWindow = new URLSearchParams(location.search).get('mode') === 'window';
 
 const $ = (id) => document.getElementById(id);
 const recordBtn    = $('recordBtn');
+const nameInput    = $('nameInput');
 const pauseBtn     = $('pauseBtn');
 const autoPauseBtn = $('autoPauseBtn');
 const muteBtn      = $('muteBtn');
@@ -30,6 +31,9 @@ if (isWindow) {
   popoutBtn.style.display = 'none';
   document.body.classList.add('window-mode');
 }
+
+// Version comes from the manifest — single source of truth, no hardcoding here.
+$('version').textContent = 'v' + chrome.runtime.getManifest().version;
 
 let status = 'idle';
 let autoPauseEnabled = false;
@@ -69,6 +73,9 @@ function render(s = {}) {
   recordBtn.textContent = active ? 'Stop & Save' : (converting ? 'Converting…' : 'Start Recording');
   recordBtn.classList.toggle('recording', active);
   recordBtn.disabled = converting; // block starting a new recording mid-encode
+
+  // The name is chosen before starting; hide the field while a session is live.
+  nameInput.style.display = (active || converting) ? 'none' : 'block';
 
   pauseBtn.style.display     = active ? 'block' : 'none';
   autoPauseBtn.style.display = active ? 'block' : 'none';
@@ -121,52 +128,33 @@ function stopPoll() { clearInterval(pollId); pollId = null; }
 
 recordBtn.addEventListener('click', async () => {
   if (status === 'recording' || status === 'paused') {
-    // Offer an M4A copy. We must pick the .m4a location now, while this click's
-    // user gesture is still live (showSaveFilePicker requires it). The WebM is
-    // saved regardless; M4A is an extra encode done by the offscreen engine.
-    let wantM4a = confirm('Also save a copy as M4A?\n\nThe WebM file is saved either way.');
-    if (wantM4a) {
-      try {
-        const m4aHandle = await window.showSaveFilePicker({
-          suggestedName: `recording_${fileStamp()}.m4a`,
-          types: [{ description: 'M4A Audio', accept: { 'audio/mp4': ['.m4a'] } }]
-        });
-        try {
-          if (m4aHandle.queryPermission &&
-              (await m4aHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
-            if (m4aHandle.requestPermission &&
-                (await m4aHandle.requestPermission({ mode: 'readwrite' })) !== 'granted') {
-              wantM4a = false;
-            }
-          }
-        } catch { /* some Chrome builds lack these on extension pages — proceed */ }
-        if (wantM4a) await storeHandle(m4aHandle, M4A_KEY);
-      } catch {
-        wantM4a = false; // user cancelled the picker — just save the WebM
-      }
-    }
-
+    // The M4A destination was already created at start (same base name as the
+    // WebM), so stopping never asks anything — the engine writes both files.
     recordBtn.disabled = true;
-    await send('stop', { m4a: wantM4a });
+    // Ensure we still hold write permission for the final commit (gesture present).
+    await ensureWritePermission();
+    await send('stop', { m4a: true });
     return;
   }
 
-  let handle;
+  // The name is set before recording; the folder is picked here. Both the
+  // crash-safe .webm and the .m4a copy are created under that name up front,
+  // so no dialog is needed at stop time (or on an error mid-recording).
+  const base = sanitizeName(nameInput.value) || `recording_${fileStamp()}`;
+
+  let dirHandle;
   try {
-    handle = await window.showSaveFilePicker({
-      suggestedName: `recording_${fileStamp()}.webm`,
-      types: [{ description: 'WebM Audio', accept: { 'audio/webm': ['.webm'] } }]
-    });
+    dirHandle = await window.showDirectoryPicker({ id: 'tab-recorder', mode: 'readwrite' });
   } catch {
     return; // user cancelled the picker
   }
 
   // Ensure readwrite permission while we still have the user's click gesture.
   try {
-    if (handle.queryPermission &&
-        (await handle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
-      if (handle.requestPermission &&
-          (await handle.requestPermission({ mode: 'readwrite' })) !== 'granted') {
+    if (dirHandle.queryPermission &&
+        (await dirHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
+      if (dirHandle.requestPermission &&
+          (await dirHandle.requestPermission({ mode: 'readwrite' })) !== 'granted') {
         return showError('Write permission was denied.');
       }
     }
@@ -175,11 +163,29 @@ recordBtn.addEventListener('click', async () => {
   const tab = await getTargetTab();
   if (!tab) return showError('Could not find a tab to record. Focus the tab first.');
 
-  await storeHandle(handle);
+  let webmHandle, m4aHandle;
+  try {
+    webmHandle = await dirHandle.getFileHandle(`${base}.webm`, { create: true });
+    m4aHandle  = await dirHandle.getFileHandle(`${base}.m4a`,  { create: true });
+  } catch (e) {
+    return showError('Could not create the output files: ' + (e?.message || e));
+  }
+
+  await storeHandle(dirHandle, DIR_KEY);
+  await storeHandle(webmHandle);
+  await storeHandle(m4aHandle, M4A_KEY);
   await send('start', { tabId: tab.id, tabTitle: tab.title || '' });
 });
 
-pauseBtn.addEventListener('click', () => send(status === 'paused' ? 'resume' : 'pause'));
+pauseBtn.addEventListener('click', async () => {
+  if (status === 'paused') {
+    // This click is a user gesture — use it to re-request write permission for
+    // the long-lived file handle. Long pauses can cause the permission grant
+    // to require activation again before createWritable succeeds in offscreen.
+    await ensureWritePermission();
+  }
+  send(status === 'paused' ? 'resume' : 'pause');
+});
 autoPauseBtn.addEventListener('click', () => send('setAutoPause', { enabled: !autoPauseEnabled }));
 muteBtn.addEventListener('click', () => send('setMute', { muted: !muteEnabled }));
 popoutBtn.addEventListener('click', () => send('popOut'));
@@ -207,6 +213,28 @@ function showError(msg) {
   errorEl.style.display = 'block';
 }
 
+// Load the stored directory handle (or the legacy file handle) and use the
+// current click's transient activation to call requestPermission(). This keeps
+// the permission 'granted' so that the offscreen document's background
+// createWritable calls (every ~10s) do not hit the "User activation is
+// required" error after long idle/pauses. Re-granting the DIRECTORY covers
+// both the .webm and the .m4a in one prompt.
+async function ensureWritePermission() {
+  try {
+    const handle = (await getHandle(DIR_KEY)) || (await getHandle());
+    if (!handle || !handle.queryPermission) return;
+    let perm = await handle.queryPermission({ mode: 'readwrite' });
+    if (perm !== 'granted' && handle.requestPermission) {
+      perm = await handle.requestPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') {
+        showError('Write permission was not granted. The file may not save correctly.');
+      }
+    }
+  } catch {
+    // Non-fatal: the next write will surface a clear error if it fails.
+  }
+}
+
 function fmtTime(ms) {
   const total = Math.floor(ms / 1000);
   const h = Math.floor(total / 3600);
@@ -218,4 +246,14 @@ function fmtTime(ms) {
 
 function fileStamp() {
   return new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+}
+
+// Make the typed name safe as a file basename: strip an extension the user may
+// have typed, characters Windows/macOS forbid, and trailing dots/spaces.
+function sanitizeName(raw) {
+  return (raw || '')
+    .replace(/\.(webm|m4a)$/i, '')
+    .replace(/[\\/:*?"<>|]/g, '_')
+    .replace(/[. ]+$/, '')
+    .trim();
 }

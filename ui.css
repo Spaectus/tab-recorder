@@ -83,6 +83,21 @@ h3 {
 }
 #waveform.paused .wave-bar { background: #f6ad55; }
 
+#nameInput {
+  width: 100%;
+  padding: 8px 9px;
+  font-size: 12px;
+  font-family: inherit;
+  background: #2d3748;
+  color: #e0e0e0;
+  border: 1px solid #4a5568;
+  border-radius: 8px;
+  margin-bottom: 6px;
+  outline: none;
+}
+#nameInput:focus { border-color: #90cdf4; }
+#nameInput::placeholder { color: #718096; }
+
 button {
   width: 100%;
   padding: 9px;
@@ -147,4 +162,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: #718096;
   margin-top: 12px;
   line-height: 1.5;
+}
+
+.version {
+  font-size: 9px;
+  color: #4a5568;
+  text-align: center;
+  margin-top: 10px;
+  letter-spacing: 0.04em;
+  user-select: none;
 }

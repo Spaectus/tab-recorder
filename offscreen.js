@@ -27,11 +27,11 @@ const COMMIT_INTERVAL = 10_000; // ms — how often we flush to disk
 const TICK_INTERVAL   = 100;    // ms — waveform / timer refresh
 const BANDS           = 10;     // waveform bars
 const BITRATE         = 128_000;
-const M4A_MIME        = 'audio/mp4;codecs=mp4a.40.2'; // AAC-LC in MP4, for the optional M4A copy
+const M4A_MIME        = 'audio/mp4;codecs=mp4a.40.2'; // AAC-LC in MP4, for the automatic M4A copy
 
 let audioCtx = null, rawStream = null, source = null, analyser = null, recorder = null;
-let m4aRecorder = null;  // second recorder, encodes the optional M4A copy live
-let m4aChunks = [];       // buffered audio/mp4 chunks (written on Stop & Save)
+let m4aRecorder = null;  // second recorder, encodes the M4A copy live
+let m4aChunks = [];       // buffered audio/mp4 chunks (written when recording ends)
 let fileHandle = null;
 let chunks = [];
 let commitTimer = null, tickTimer = null;
@@ -54,7 +54,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     case 'startRecordingOffscreen':
       if (!active) { active = true; muted = !!msg.muted; start(msg.streamId); }
       break;
-    case 'stopRecordingOffscreen':   stop(msg.m4a);    break;
+    case 'stopRecordingOffscreen':   stop(msg.m4a !== false); break;
     case 'pauseRecordingOffscreen':  manualPause();    break;
     case 'resumeRecordingOffscreen': manualResume();   break;
     case 'autoPause':   if (!manuallyPaused && !autoPaused) doAutoPause(); break;
@@ -68,7 +68,9 @@ chrome.runtime.onMessage.addListener((msg) => {
 sendEvt({ evt: 'ready' });
 
 function sendEvt(payload)            { chrome.runtime.sendMessage(payload).catch(() => {}); }
-function sendStatus(status, error)   { sendEvt({ evt: 'status', status, error: error || '' }); }
+function sendStatus(status, error = '', extra = {}) {
+  sendEvt({ evt: 'status', status, error: error || '', ...extra });
+}
 function sendLive(waveform, elapsed) { sendEvt({ evt: 'live', waveform, elapsedMs: elapsed }); }
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
@@ -128,10 +130,11 @@ async function start(streamId) {
   recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
   recorder.onerror = (e) => fail('Recorder error: ' + (e?.error?.message || 'unknown'));
 
-  // Second recorder for the optional M4A copy. It encodes AAC/MP4 live off the
-  // same stream — the most reliable route (decode-then-reencode of the WebM was
-  // fragile). Whether the user actually wants the copy is decided at Stop & Save;
-  // we buffer it regardless and only write it if asked. It runs CONTINUOUSLY and
+  // Second recorder for the M4A copy. It encodes AAC/MP4 live off the same
+  // stream — the most reliable route (decode-then-reencode of the WebM was
+  // fragile). The .m4a destination was created at start alongside the .webm,
+  // and the copy is written automatically on EVERY end of recording — manual
+  // stop, tab close, or an error (see salvageM4a). It runs CONTINUOUSLY and
   // is never paused: MP4 tolerates pause/resume gaps poorly, and a complete valid
   // file matters more than mirroring the WebM's skipped spans for an extra copy.
   m4aRecorder = null;
@@ -158,7 +161,7 @@ async function start(streamId) {
   sendStatus('recording');
 }
 
-async function stop(convertM4a = false) {
+async function stop(convertM4a = true) {
   if (stopping) return;
   stopping = true;
   clearInterval(commitTimer); commitTimer = null;
@@ -179,49 +182,59 @@ async function stop(convertM4a = false) {
     });
   }
 
-  await commit({ force: true }); // final flush (must run before teardown nulls state)
-
-  // Snapshot the recorded audio before teardown clears the buffers. The WebM is
-  // already durable on disk; the M4A is an additional copy. Blobs reference the
-  // existing chunk data (no copy), so keeping both around briefly is cheap.
-  const m4aBlob  = (convertM4a && m4aChunks.length) ? new Blob(m4aChunks, { type: 'audio/mp4' })  : null;
-  const webmBlob = (convertM4a && chunks.length)    ? new Blob(chunks,    { type: 'audio/webm' }) : null;
+  // Snapshot the recorded audio before the final commit: if that commit fails
+  // (e.g. write permission lost), fail() tears down the buffers — the M4A must
+  // already be captured by then. Blobs reference the existing chunk data (no
+  // copy), so keeping both around briefly is cheap.
+  const m4aBlob  = m4aChunks.length ? new Blob(m4aChunks, { type: 'audio/mp4' })  : null;
+  const webmBlob = chunks.length    ? new Blob(chunks,    { type: 'audio/webm' }) : null;
 
   // Diagnostics (visible in the offscreen document's console: chrome://extensions
   // → this extension → "Inspect views: offscreen.html"). Pinpoints a silent 0 KB:
-  // convertM4a=false means the popup never asked for M4A; empty buffers mean no
-  // audio was captured for it.
+  // empty buffers mean no audio was captured for the M4A.
   console.log('[offscreen] stop: convertM4a=%s liveBytes=%d webmChunks=%d',
     convertM4a, m4aBlob ? m4aBlob.size : 0, chunks.length);
 
+  // Final WebM flush. On failure, commit() routes through fail(), which
+  // salvages the M4A and reports the error — nothing left to do here.
+  if (!await commit({ force: true })) return;
+
   teardownMedia();
 
+  let m4aSaved = false;
   if (convertM4a) {
-    try {
-      sendStatus('converting');
-      await saveM4a(m4aBlob, webmBlob);
-    } catch (e) {
-      // The WebM is intact; report the M4A failure rather than silently dropping it.
-      return fail('M4A save failed: ' + (e?.message || e));
+    const m4aHandle = await getHandle(M4A_KEY).catch(() => null);
+    if (!m4aHandle) {
+      // Recording started under the old flow (no .m4a picked at start) — the
+      // WebM is saved; there is simply no M4A destination to write to.
+      console.log('[offscreen] stop: no M4A save location — skipping the M4A copy');
+    } else {
+      try {
+        sendStatus('converting');
+        await saveM4a(m4aHandle, m4aBlob, webmBlob);
+        m4aSaved = true;
+      } catch (e) {
+        // The WebM is intact; report the M4A failure rather than silently
+        // dropping it. No salvage — that would just retry the same write.
+        return fail('M4A save failed: ' + (e?.message || e), { salvage: false });
+      }
     }
   }
 
-  sendStatus('idle'); // background persists state + closes this document
+  sendStatus('idle', '', { m4a: m4aSaved }); // background persists state + closes this document
 }
 
-// ── M4A export (optional, on Stop & Save) ────────────────────────────────────
-// Write the optional M4A copy to the .m4a the user picked in the popup.
+// ── M4A export (automatic, on every end of recording) ───────────────────────
+// Write the M4A copy to the .m4a created at start (same base name as the WebM).
 //   Primary path: the live audio/mp4 MediaRecorder already encoded the file —
 //     just write its buffered bytes (same proven mechanism as the WebM).
 //   Fallback path (older Chrome without audio/mp4 recording): decode the WebM
 //     back to PCM and re-encode to AAC with WebCodecs (see m4a.js).
 
-async function saveM4a(m4aBlob, webmBlob) {
-  const m4aHandle = await getHandle(M4A_KEY);
-  if (!m4aHandle) throw new Error('no M4A save location');
+async function saveM4a(m4aHandle, m4aBlob, webmBlob) {
   if (m4aHandle.queryPermission) {
     const perm = await m4aHandle.queryPermission({ mode: 'readwrite' });
-    if (perm !== 'granted') throw new Error('no permission to write the M4A file');
+    if (perm !== 'granted') throw new Error('write permission lost for M4A file');
   }
 
   let outBlob = (m4aBlob && m4aBlob.size) ? m4aBlob : null;
@@ -253,12 +266,46 @@ async function saveM4a(m4aBlob, webmBlob) {
   await writable.close(); // durability point, same as the WebM commit
 }
 
-async function fail(message) {
+async function fail(message, { salvage = true } = {}) {
   console.error('[offscreen]', message);
   clearInterval(commitTimer); commitTimer = null;
   clearInterval(tickTimer);   tickTimer = null;
+  // An error must not cost the user the M4A: write whatever the live audio/mp4
+  // recorder buffered so far to the .m4a chosen at start. This covers e.g. the
+  // WebM commit losing write permission after a long pause. Callers that
+  // already attempted the M4A write pass salvage:false to avoid a blind retry.
+  let salvaged = false;
+  if (salvage) {
+    try { salvaged = await salvageM4a(); }
+    catch (e) { console.warn('[offscreen] M4A salvage failed:', e?.message || e); }
+  }
   teardownMedia();
+  if (salvaged) message += ' An M4A copy of the audio captured so far was saved.';
   sendStatus('error', message); // background persists + closes this document
+}
+
+// Best-effort: flush the live M4A recorder and write its buffer to the .m4a.
+// Used only on the error path — the normal path goes through stop()/saveM4a().
+async function salvageM4a() {
+  if (m4aRecorder && m4aRecorder.state !== 'inactive') {
+    await new Promise((resolve) => {
+      m4aRecorder.addEventListener('stop', resolve, { once: true });
+      try { m4aRecorder.stop(); } catch { resolve(); }
+    });
+  }
+  if (!m4aChunks.length) return false;
+  const m4aHandle = await getHandle(M4A_KEY);
+  if (!m4aHandle) return false;
+  if (m4aHandle.queryPermission &&
+      (await m4aHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
+    return false; // same permission loss as the WebM — nothing we can do headless
+  }
+  const blob = new Blob(m4aChunks, { type: 'audio/mp4' });
+  console.log('[offscreen] salvageM4a: writing %d bytes after error', blob.size);
+  const writable = await m4aHandle.createWritable({ keepExistingData: false });
+  await writable.write(blob);
+  await writable.close();
+  return true;
 }
 
 // ── Pause / resume (manual + auto) ───────────────────────────────────────────
@@ -268,6 +315,12 @@ function manualPause() {
   manuallyPaused = true;
   if (recorder.state === 'recording') { tryCall(() => recorder.pause()); beginPause(); }
   autoPaused = false;
+  // Flush current state (no more data will arrive) then stop timer to avoid
+  // repeated createWritable calls during long/idle pause, which can lose
+  // the permission grant requiring user activation later.
+  commit({ force: true }).finally(() => {
+    clearInterval(commitTimer); commitTimer = null;
+  });
   sendStatus('paused');
 }
 
@@ -275,18 +328,25 @@ function manualResume() {
   if (!recorder) return;
   manuallyPaused = false;
   if (recorder.state === 'paused') { tryCall(() => recorder.resume()); endPause(); }
+  // Restart periodic commits now that we are recording again.
+  if (!commitTimer) commitTimer = setInterval(commit, COMMIT_INTERVAL);
   sendStatus('recording');
 }
 
 function doAutoPause() {
   autoPaused = true;
   if (recorder.state === 'recording') { tryCall(() => recorder.pause()); beginPause(); }
+  // Flush then halt commits during the pause (same reason as manual).
+  commit({ force: true }).finally(() => {
+    clearInterval(commitTimer); commitTimer = null;
+  });
   sendStatus('paused');
 }
 
 function doAutoResume() {
   autoPaused = false;
   if (recorder.state === 'paused') { tryCall(() => recorder.resume()); endPause(); }
+  if (!commitTimer) commitTimer = setInterval(commit, COMMIT_INTERVAL);
   sendStatus('recording');
 }
 
@@ -336,20 +396,39 @@ function computeBands(freq) {
 
 // ── Disk commit (crash-safe via close()) ─────────────────────────────────────
 
+// Returns true when there was nothing to do or the write landed; false when the
+// write failed (fail() has then already salvaged the M4A and reported the error).
 async function commit({ force = false } = {}) {
-  if (!fileHandle || chunks.length === 0) return;
-  if (committing && !force) return;
+  if (!fileHandle || chunks.length === 0) return true;
+  if (committing && !force) return true;
   committing = true;
   try {
+    // Pre-check permission. If not granted, do not call createWritable —
+    // it would throw "User activation is required..." inside the browser
+    // when it tries (and fails) to prompt. Fail with a clean message instead.
+    if (fileHandle.queryPermission) {
+      const perm = await fileHandle.queryPermission({ mode: 'readwrite' });
+      if (perm !== 'granted') {
+        throw new Error('write permission lost (user activation required to re-grant)');
+      }
+    }
     const blob     = new Blob(chunks, { type: 'audio/webm' });
     const writable = await fileHandle.createWritable({ keepExistingData: false });
     await writable.write(blob);
     await writable.close(); // commit point — data is now durable on disk
   } catch (e) {
     committing = false;
-    return fail('Saving failed: ' + (e?.message || e));
+    const msg = e?.message || String(e);
+    // Surface a user-friendly notice instead of raw DOMException.
+    if (/user activation|permission lost|write permission/i.test(msg)) {
+      await fail('Saving failed: write permission to the output file was lost. Recording stopped. Re-select a save location to start again.');
+    } else {
+      await fail('Saving failed: ' + msg);
+    }
+    return false;
   }
   committing = false;
+  return true;
 }
 
 // ── Teardown ─────────────────────────────────────────────────────────────────

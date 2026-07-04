@@ -13,12 +13,14 @@
   <div id="recInfo" class="rec-info"></div>
   <div id="error" class="error"></div>
   <div id="waveform"></div>
+  <input id="nameInput" type="text" placeholder="Recording name (optional)" autocomplete="off" spellcheck="false">
   <button id="recordBtn">Start Recording</button>
   <button id="pauseBtn">Pause</button>
   <button id="autoPauseBtn">Auto-pause: Off</button>
   <button id="muteBtn">Mute playback: Off</button>
   <button id="popoutBtn">Pop out &#8599;</button>
-  <p class="hint">Pick where to save. The file is updated every ~10&nbsp;s, so a crash loses at most a few seconds.</p>
+  <p class="hint">Pick a folder to save into. Both a crash-safe .webm and an .m4a copy are saved there under this name, automatically on stop.</p>
+  <div id="version" class="version"></div>
   <script type="module" src="ui.js"></script>
 </body>
 </html>
