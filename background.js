@@ -15,6 +15,11 @@ let pendingStart = null; // { streamId, autoPause } awaiting the offscreen doc
 chrome.runtime.onInstalled.addListener(initState);
 chrome.runtime.onStartup.addListener(initState);
 
+// When user clicks extension icon, open pop-out window
+chrome.action.onClicked.addListener(() => {
+  openPopout();
+});
+
 // Storage outlives the offscreen engine: if the SW slept or the extension
 // reloaded mid-recording, storage still says 'recording'/'paused' while the
 // engine is gone. That stale state makes the UI show "Stop & Save" with nothing
