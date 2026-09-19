@@ -56,14 +56,14 @@ function updateBadge(status) {
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  if (msg?.cmd) { handleCmd(msg, sendResponse); return true; } // async response
+  if (msg?.cmd) { return handleCmd(msg); } // return promise for async response
   if (msg?.evt) { handleEvt(msg); return false; }
   return false;
 });
 
 // ── UI commands ──────────────────────────────────────────────────────────────
 
-async function handleCmd(msg, sendResponse) {
+async function handleCmd(msg) {
   try {
     switch (msg.cmd) {
       case 'start':        await startRecording(msg.tabId, msg.tabTitle); break;
@@ -90,12 +90,12 @@ async function handleCmd(msg, sendResponse) {
         break;
       }
       case 'popOut':       await openPopout(); break;
-      default: sendResponse({ ok: false, error: 'unknown cmd' }); return;
+      default: return { ok: false, error: 'unknown cmd' };
     }
-    sendResponse({ ok: true });
+    return { ok: true };
   } catch (e) {
     await setError(e?.message || String(e));
-    sendResponse({ ok: false, error: e?.message || String(e) });
+    return { ok: false, error: e?.message || String(e) };
   }
 }
 
@@ -109,11 +109,13 @@ async function startRecording(tabId, tabTitle) {
   const { autoPause, muted } = await chrome.storage.local.get(['autoPause', 'muted']);
   pendingStart = { streamId, autoPause: !!autoPause, muted: !!muted };
   await chrome.storage.local.set({
+    status: 'recording',
     recordingTabId: tabId,
     tabTitle: tabTitle || '',
     error: '',
     startedAt: Date.now()
   });
+  updateBadge('recording');
   // A fresh offscreen doc announces itself with { evt:'ready' }, which triggers
   // the start. An already-open doc won't, so poke it directly in that case.
   const created = await ensureOffscreen();
