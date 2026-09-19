@@ -19,6 +19,7 @@ const statusText   = $('statusText');
 const recInfo      = $('recInfo');
 const errorEl      = $('error');
 const waveform     = $('waveform');
+const m4aNotice    = $('m4aNotice');
 
 const bars = Array.from({ length: 10 }, () => {
   const b = document.createElement('div');
@@ -44,13 +45,17 @@ let pollId = null;
 init();
 
 async function init() {
-  const s = await chrome.storage.local.get(['status', 'tabTitle', 'autoPause', 'muted', 'error']);
+  const s = await chrome.storage.local.get(['status', 'tabTitle', 'autoPause', 'muted', 'error', 'm4aSupported']);
   render(s);
+  m4aNotice.style.display = (s.m4aSupported === false) ? 'block' : 'none';
   // Stay in sync with the engine and the other view.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
     if (changes.status || changes.error || changes.tabTitle || changes.autoPause || changes.muted) {
       chrome.storage.local.get(['status', 'tabTitle', 'autoPause', 'muted', 'error']).then(render);
+    }
+    if (changes.m4aSupported) {
+      m4aNotice.style.display = (changes.m4aSupported.newValue === false) ? 'block' : 'none';
     }
   });
 }

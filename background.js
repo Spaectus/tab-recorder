@@ -58,6 +58,8 @@ function updateBadge(status) {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.cmd) { return handleCmd(msg); } // return promise for async response
   if (msg?.evt) { handleEvt(msg); return false; }
+  if ('m4aSupport' in msg) { chrome.storage.local.set({ m4aSupported: msg.m4aSupport }); return false; }
+  if (msg?.m4aDisabled) { chrome.storage.local.set({ m4aSupported: false }); return false; }
   return false;
 });
 
