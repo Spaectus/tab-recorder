@@ -147,6 +147,9 @@ recordBtn.addEventListener('click', async () => {
   // so no dialog is needed at stop time (or on an error mid-recording).
   const base = sanitizeName(nameInput.value) || `recording_${fileStamp()}`;
 
+  const tab = await getTargetTab();
+  if (!tab) return showError('Could not find a tab to record. Focus the tab first.');
+
   let dirHandle;
   try {
     dirHandle = await window.showDirectoryPicker({ id: 'tab-recorder', mode: 'readwrite' });
@@ -165,9 +168,6 @@ recordBtn.addEventListener('click', async () => {
     }
   } catch { /* some Chrome builds lack these on extension pages — proceed */ }
 
-  const tab = await getTargetTab();
-  if (!tab) return showError('Could not find a tab to record. Focus the tab first.');
-
   let webmHandle, m4aHandle;
   try {
     webmHandle = await dirHandle.getFileHandle(`${base}.webm`, { create: true });
@@ -179,7 +179,13 @@ recordBtn.addEventListener('click', async () => {
   await storeHandle(dirHandle, DIR_KEY);
   await storeHandle(webmHandle);
   await storeHandle(m4aHandle, M4A_KEY);
-  await send('start', { tabId: tab.id, tabTitle: tab.title || '' });
+  
+  // Send start command. Background writes status='recording' immediately.
+  // In popup mode, Chrome may close the popup before we get a response
+  // (permission dialogs force popup closure), but the message is sent
+  // synchronously and background will persist the state. When popup reopens,
+  // init() reads the persisted recording state from storage.
+  chrome.runtime.sendMessage({ cmd: 'start', tabId: tab.id, tabTitle: tab.title || '' });
 });
 
 pauseBtn.addEventListener('click', async () => {

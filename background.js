@@ -102,14 +102,7 @@ async function handleCmd(msg) {
 }
 
 async function startRecording(tabId, tabTitle) {
-  let streamId;
-  try {
-    streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
-  } catch (e) {
-    throw new Error('Could not capture this tab: ' + (e?.message || e));
-  }
-  const { autoPause, muted } = await chrome.storage.local.get(['autoPause', 'muted']);
-  pendingStart = { streamId, autoPause: !!autoPause, muted: !!muted };
+  // Write status immediately so UI sees it when reopening
   await chrome.storage.local.set({
     status: 'recording',
     recordingTabId: tabId,
@@ -118,6 +111,16 @@ async function startRecording(tabId, tabTitle) {
     startedAt: Date.now()
   });
   updateBadge('recording');
+
+  let streamId;
+  try {
+    streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId });
+  } catch (e) {
+    throw new Error('Could not capture this tab: ' + (e?.message || e));
+  }
+  const { autoPause, muted } = await chrome.storage.local.get(['autoPause', 'muted']);
+  pendingStart = { streamId, autoPause: !!autoPause, muted: !!muted };
+
   // A fresh offscreen doc announces itself with { evt:'ready' }, which triggers
   // the start. An already-open doc won't, so poke it directly in that case.
   const created = await ensureOffscreen();
