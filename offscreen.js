@@ -48,6 +48,8 @@ let committing = false;
 let stopping = false;
 let active = false;      // a recording session is live or being set up
 
+let m4aSupported = false; // set by checkM4aSupport on load
+
 chrome.runtime.onMessage.addListener((msg) => {
   if (!msg || !msg.action) return; // UI uses .cmd, background events use .evt
   switch (msg.action) {
@@ -62,6 +64,26 @@ chrome.runtime.onMessage.addListener((msg) => {
     case 'setMute':     setMute(!!msg.muted);                              break;
   }
 });
+
+// Check M4A support and notify background
+async function checkM4aSupport() {
+  if (!MediaRecorder.isTypeSupported(M4A_MIME)) {
+    sendEvt({ m4aSupport: false });
+    return false;
+  }
+  try {
+    const config = { codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2 };
+    const supported = await AudioEncoder.isConfigSupported(config);
+    const ok = supported?.supported === true;
+    sendEvt({ m4aSupport: ok });
+    return ok;
+  } catch {
+    sendEvt({ m4aSupport: false });
+    return false;
+  }
+}
+
+checkM4aSupport().then(ok => { m4aSupported = ok; });
 
 // Tell the service worker we're alive so it can hand us the start message
 // without racing this module's listener registration.
@@ -138,7 +160,7 @@ async function start(streamId) {
   // is never paused: MP4 tolerates pause/resume gaps poorly, and a complete valid
   // file matters more than mirroring the WebM's skipped spans for an extra copy.
   m4aRecorder = null;
-  if (MediaRecorder.isTypeSupported(M4A_MIME)) {
+  if (m4aSupported && MediaRecorder.isTypeSupported(M4A_MIME)) {
     try {
       m4aRecorder = new MediaRecorder(rawStream, { mimeType: M4A_MIME, audioBitsPerSecond: BITRATE });
       m4aRecorder.ondataavailable = (e) => { if (e.data && e.data.size) m4aChunks.push(e.data); };
@@ -202,7 +224,7 @@ async function stop(convertM4a = true) {
   teardownMedia();
 
   let m4aSaved = false;
-  if (convertM4a) {
+  if (convertM4a && m4aSupported) {
     const m4aHandle = await getHandle(M4A_KEY).catch(() => null);
     if (!m4aHandle) {
       // Recording started under the old flow (no .m4a picked at start) — the
@@ -214,9 +236,9 @@ async function stop(convertM4a = true) {
         await saveM4a(m4aHandle, m4aBlob, webmBlob);
         m4aSaved = true;
       } catch (e) {
-        // The WebM is intact; report the M4A failure rather than silently
-        // dropping it. No salvage — that would just retry the same write.
-        return fail('M4A save failed: ' + (e?.message || e), { salvage: false });
+        // M4A failure is non-fatal: WebM is intact, just log the error
+        console.error('[offscreen] M4A save failed:', e?.message || e);
+        sendEvt({ m4aDisabled: true, reason: e?.message || String(e) });
       }
     }
   }
