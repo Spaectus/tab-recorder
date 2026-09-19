@@ -28,10 +28,9 @@ const bars = Array.from({ length: 10 }, () => {
   return b;
 });
 
-if (isWindow) {
-  popoutBtn.style.display = 'none';
-  document.body.classList.add('window-mode');
-}
+// Always hide pop-out button since we only use pop-out mode now
+popoutBtn.style.display = 'none';
+document.body.classList.add('window-mode');
 
 // Version comes from the manifest — single source of truth, no hardcoding here.
 $('version').textContent = 'v' + chrome.runtime.getManifest().version;
@@ -48,6 +47,7 @@ async function init() {
   const s = await chrome.storage.local.get(['status', 'tabTitle', 'autoPause', 'muted', 'error', 'm4aSupported']);
   render(s);
   m4aNotice.style.display = (s.m4aSupported === false) ? 'block' : 'none';
+  
   // Stay in sync with the engine and the other view.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
@@ -157,17 +157,6 @@ recordBtn.addEventListener('click', async () => {
     return; // user cancelled the picker
   }
 
-  // Ensure readwrite permission while we still have the user's click gesture.
-  try {
-    if (dirHandle.queryPermission &&
-        (await dirHandle.queryPermission({ mode: 'readwrite' })) !== 'granted') {
-      if (dirHandle.requestPermission &&
-          (await dirHandle.requestPermission({ mode: 'readwrite' })) !== 'granted') {
-        return showError('Write permission was denied.');
-      }
-    }
-  } catch { /* some Chrome builds lack these on extension pages — proceed */ }
-
   let webmHandle, m4aHandle;
   try {
     webmHandle = await dirHandle.getFileHandle(`${base}.webm`, { create: true });
@@ -180,11 +169,6 @@ recordBtn.addEventListener('click', async () => {
   await storeHandle(webmHandle);
   await storeHandle(m4aHandle, M4A_KEY);
   
-  // Send start command. Background writes status='recording' immediately.
-  // In popup mode, Chrome may close the popup before we get a response
-  // (permission dialogs force popup closure), but the message is sent
-  // synchronously and background will persist the state. When popup reopens,
-  // init() reads the persisted recording state from storage.
   chrome.runtime.sendMessage({ cmd: 'start', tabId: tab.id, tabTitle: tab.title || '' });
 });
 
@@ -199,16 +183,9 @@ pauseBtn.addEventListener('click', async () => {
 });
 autoPauseBtn.addEventListener('click', () => send('setAutoPause', { enabled: !autoPauseEnabled }));
 muteBtn.addEventListener('click', () => send('setMute', { muted: !muteEnabled }));
-popoutBtn.addEventListener('click', () => send('popOut'));
 
-// In the popup, the active tab of the current window is the target. In the
-// pop-out window (its own popup-type window), fall back to the last focused
-// normal browser window's active tab.
+// Pop-out window: get the active tab from the last focused normal browser window
 async function getTargetTab() {
-  if (!isWindow) {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    return tab;
-  }
   const win = await chrome.windows.getLastFocused({ windowTypes: ['normal'], populate: true });
   return win?.tabs?.find(t => t.active);
 }
