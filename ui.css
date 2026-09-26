@@ -186,6 +186,18 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   margin-bottom: 10px;
   line-height: 1.4;
 }
+
+.keep-open-notice {
+  display: none;
+  font-size: 11px;
+  color: #f6ad55;
+  background: #3d2e1d;
+  border: 1px solid #f6ad55;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
 #reconnectBtn {
   background: #2d3748;
   color: #f6ad55;

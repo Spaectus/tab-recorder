@@ -10,19 +10,10 @@ jobs:
       - uses: jdx/mise-action@v2
       - run: prek run --all-files
 
-  manifest:
+  webstore-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate manifest
-        run: |
-          node -e '
-            const m = require("./manifest.json");
-            const fail = (msg) => { console.error("FAIL: " + msg); process.exit(1); };
-            if (m.manifest_version !== 3) fail("manifest_version must be 3");
-            if (!m.name) fail("name is required");
-            if (!/^\d+\.\d+\.\d+$/.test(m.version)) fail("version must be semver (x.y.z)");
-            if (!m.background?.service_worker) fail("background.service_worker is required");
-            if (!m.action?.default_icon) fail("action.default_icon is required");
-            console.log("manifest OK: " + m.name + " v" + m.version);
-          '
+      - uses: Circadian-agent/chrome-extension-rejection-lint@v1.0.27
+        with:
+          path: .
