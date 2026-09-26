@@ -20,6 +20,7 @@ const statusText   = $('statusText');
 const recInfo      = $('recInfo');
 const errorEl      = $('error');
 const permLostEl   = $('permLost');
+const keepOpenNotice = $('keepOpenNotice');
 const reconnectBtn = $('reconnectBtn');
 const waveform     = $('waveform');
 const m4aNotice    = $('m4aNotice');
@@ -82,6 +83,9 @@ function render(s = {}) {
   // closed mid-recording, the engine keeps recording in memory but cannot write
   // to disk until the user re-grants access here.
   permLostEl.style.display = (active && s.permissionLost) ? 'block' : 'none';
+
+  // Crash-safe flushing needs the granting window to stay open — warn up front.
+  keepOpenNotice.style.display = active ? 'block' : 'none';
 
   recordBtn.textContent = active ? 'Stop & Save' : (converting ? 'Converting…' : 'Start Recording');
   recordBtn.classList.toggle('recording', active);
