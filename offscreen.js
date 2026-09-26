@@ -21,13 +21,12 @@
 // what actually flushes to disk, so a crash loses at most one commit interval.
 
 import { getHandle, M4A_KEY } from './idb.js';
-import { encodeM4a, AAC_SAMPLE_RATE } from './m4a.js';
+import { encodeM4a, AAC_SAMPLE_RATE, isM4aSupported, M4A_MIME } from './m4a.js';
 
 const COMMIT_INTERVAL = 10_000; // ms — how often we flush to disk
 const TICK_INTERVAL   = 100;    // ms — waveform / timer refresh
 const BANDS           = 10;     // waveform bars
 const BITRATE         = 128_000;
-const M4A_MIME        = 'audio/mp4;codecs=mp4a.40.2'; // AAC-LC in MP4, for the automatic M4A copy
 
 let audioCtx = null, rawStream = null, source = null, analyser = null, recorder = null;
 let m4aRecorder = null;  // second recorder, encodes the M4A copy live
@@ -49,7 +48,7 @@ let stopping = false;
 let active = false;      // a recording session is live or being set up
 let permissionLost = false; // write grant died with the UI window that requested it
 
-let m4aSupported = false; // set by checkM4aSupport on load
+let m4aSupported = false; // resolved from m4aSupportPromise in start()
 
 chrome.runtime.onMessage.addListener((msg) => {
   if (!msg || !msg.action) return; // UI uses .cmd, background events use .evt
@@ -69,23 +68,12 @@ chrome.runtime.onMessage.addListener((msg) => {
 
 // Check M4A support and notify background
 async function checkM4aSupport() {
-  if (!MediaRecorder.isTypeSupported(M4A_MIME)) {
-    sendEvt({ m4aSupport: false });
-    return false;
-  }
-  try {
-    const config = { codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2 };
-    const supported = await AudioEncoder.isConfigSupported(config);
-    const ok = supported?.supported === true;
-    sendEvt({ m4aSupport: ok });
-    return ok;
-  } catch {
-    sendEvt({ m4aSupport: false });
-    return false;
-  }
+  const ok = await isM4aSupported();
+  sendEvt({ m4aSupport: ok });
+  return ok;
 }
 
-checkM4aSupport().then(ok => { m4aSupported = ok; });
+const m4aSupportPromise = checkM4aSupport();
 
 // Tell the service worker we're alive so it can hand us the start message
 // without racing this module's listener registration.
@@ -101,6 +89,10 @@ function sendLive(waveform, elapsed) { sendEvt({ evt: 'live', waveform, elapsedM
 
 async function start(streamId) {
   try {
+    // The support check runs on module load; wait for it so the M4A recorder
+    // below is gated on the real answer, not a race.
+    m4aSupported = await m4aSupportPromise;
+
     fileHandle = await getHandle(); // IndexedDB is available in offscreen docs
     if (!fileHandle) return fail('No save location was set.');
 
@@ -236,8 +228,8 @@ async function stop(convertM4a = true) {
   if (convertM4a && m4aSupported) {
     const m4aHandle = await getHandle(M4A_KEY).catch(() => null);
     if (!m4aHandle) {
-      // Recording started under the old flow (no .m4a picked at start) — the
-      // WebM is saved; there is simply no M4A destination to write to.
+      // No .m4a destination (browser doesn't support M4A, or its creation
+      // failed) — the WebM is saved; there is simply no M4A copy to write.
       console.log('[offscreen] stop: no M4A save location — skipping the M4A copy');
     } else {
       try {

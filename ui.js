@@ -4,6 +4,7 @@
 // chrome.storage.session for the live waveform/timer.
 
 import { storeHandle, getHandle, M4A_KEY, DIR_KEY } from './idb.js';
+import { isM4aSupported } from './m4a.js';
 
 const isWindow = new URLSearchParams(location.search).get('mode') === 'window';
 
@@ -149,9 +150,9 @@ recordBtn.addEventListener('click', async () => {
     return;
   }
 
-  // The name is set before recording; the folder is picked here. Both the
-  // crash-safe .webm and the .m4a copy are created under that name up front,
-  // so no dialog is needed at stop time (or on an error mid-recording).
+  // The name is set before recording; the folder is picked here. M4A support is
+  // detected first so the .m4a destination is created alongside the .webm only
+  // when this browser can actually fill it — no empty .m4a otherwise.
   const base = sanitizeName(nameInput.value) || `recording_${fileStamp()}`;
 
   const tab = await getTargetTab();
@@ -164,17 +165,18 @@ recordBtn.addEventListener('click', async () => {
     return; // user cancelled the picker
   }
 
+  const m4aSupported = await isM4aSupported();
   let webmHandle, m4aHandle;
   try {
     webmHandle = await dirHandle.getFileHandle(`${base}.webm`, { create: true });
-    m4aHandle  = await dirHandle.getFileHandle(`${base}.m4a`,  { create: true });
+    if (m4aSupported) m4aHandle = await dirHandle.getFileHandle(`${base}.m4a`, { create: true });
   } catch (e) {
     return showError('Could not create the output files: ' + (e?.message || e));
   }
 
   await storeHandle(dirHandle, DIR_KEY);
   await storeHandle(webmHandle);
-  await storeHandle(m4aHandle, M4A_KEY);
+  if (m4aHandle) await storeHandle(m4aHandle, M4A_KEY);
 
   chrome.runtime.sendMessage({ cmd: 'start', tabId: tab.id, tabTitle: tab.title || '' });
 });
