@@ -47,7 +47,7 @@ async function init() {
   const s = await chrome.storage.local.get(['status', 'tabTitle', 'autoPause', 'muted', 'error', 'm4aSupported']);
   render(s);
   m4aNotice.style.display = (s.m4aSupported === false) ? 'block' : 'none';
-  
+
   // Stay in sync with the engine and the other view.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
@@ -168,7 +168,7 @@ recordBtn.addEventListener('click', async () => {
   await storeHandle(dirHandle, DIR_KEY);
   await storeHandle(webmHandle);
   await storeHandle(m4aHandle, M4A_KEY);
-  
+
   chrome.runtime.sendMessage({ cmd: 'start', tabId: tab.id, tabTitle: tab.title || '' });
 });
 
