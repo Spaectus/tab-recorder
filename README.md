@@ -56,6 +56,8 @@ Focus the tab you want before starting. In pop-out mode, the recorder window its
 
 The popup and pop-out window are pure viewers — they render only what the engine reports in `chrome.storage.local`. Closing the UI does not stop a recording.
 
+**Write permission is tied to the UI window that granted it.** If you close that window mid-recording, the engine keeps recording in memory but can no longer flush to disk (Chrome revokes the grant with the window). Reopen the UI and click **Reconnect save folder** to re-grant access and resume disk writes; **Stop & Save** re-grants automatically.
+
 | State | Dot | Status text | Primary button | Other controls |
 |---|---|---|---|---|
 | Idle | green | Ready | Start Recording | Pop out (popup only) |

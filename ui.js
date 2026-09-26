@@ -18,6 +18,8 @@ const dot          = $('dot');
 const statusText   = $('statusText');
 const recInfo      = $('recInfo');
 const errorEl      = $('error');
+const permLostEl   = $('permLost');
+const reconnectBtn = $('reconnectBtn');
 const waveform     = $('waveform');
 const m4aNotice    = $('m4aNotice');
 
@@ -44,15 +46,15 @@ let pollId = null;
 init();
 
 async function init() {
-  const s = await chrome.storage.local.get(['status', 'tabTitle', 'autoPause', 'muted', 'error', 'm4aSupported']);
+  const s = await chrome.storage.local.get(['status', 'tabTitle', 'autoPause', 'muted', 'error', 'm4aSupported', 'permissionLost']);
   render(s);
   m4aNotice.style.display = (s.m4aSupported === false) ? 'block' : 'none';
 
   // Stay in sync with the engine and the other view.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.status || changes.error || changes.tabTitle || changes.autoPause || changes.muted) {
-      chrome.storage.local.get(['status', 'tabTitle', 'autoPause', 'muted', 'error']).then(render);
+    if (changes.status || changes.error || changes.tabTitle || changes.autoPause || changes.muted || changes.permissionLost) {
+      chrome.storage.local.get(['status', 'tabTitle', 'autoPause', 'muted', 'error', 'permissionLost']).then(render);
     }
     if (changes.m4aSupported) {
       m4aNotice.style.display = (changes.m4aSupported.newValue === false) ? 'block' : 'none';
@@ -74,6 +76,11 @@ function render(s = {}) {
 
   errorEl.style.display = (status === 'error' && s.error) ? 'block' : 'none';
   if (status === 'error' && s.error) errorEl.textContent = s.error;
+
+  // The write grant is tied to the UI window that requested it; if that window
+  // closed mid-recording, the engine keeps recording in memory but cannot write
+  // to disk until the user re-grants access here.
+  permLostEl.style.display = (active && s.permissionLost) ? 'block' : 'none';
 
   recordBtn.textContent = active ? 'Stop & Save' : (converting ? 'Converting…' : 'Start Recording');
   recordBtn.classList.toggle('recording', active);
@@ -183,6 +190,14 @@ pauseBtn.addEventListener('click', async () => {
 });
 autoPauseBtn.addEventListener('click', () => send('setAutoPause', { enabled: !autoPauseEnabled }));
 muteBtn.addEventListener('click', () => send('setMute', { muted: !muteEnabled }));
+
+// Re-grant write access after the granting window was closed mid-recording.
+// This click is the user gesture requestPermission() needs; the engine then
+// resumes committing to disk.
+reconnectBtn.addEventListener('click', async () => {
+  await ensureWritePermission();
+  await send('recheckPermission');
+});
 
 // Pop-out window: get the active tab from the last focused normal browser window
 async function getTargetTab() {

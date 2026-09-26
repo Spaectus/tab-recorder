@@ -28,7 +28,7 @@ chrome.action.onClicked.addListener(() => {
 async function initState() {
   const { status } = await chrome.storage.local.get('status');
   if (!status) {
-    await chrome.storage.local.set({ status: 'idle', autoPause: false, muted: false });
+    await chrome.storage.local.set({ status: 'idle', autoPause: false, muted: false, permissionLost: false });
   } else if ((status === 'recording' || status === 'paused') && !(await hasOffscreen())) {
     await resetToIdle();
   }
@@ -38,7 +38,7 @@ async function initState() {
 
 async function resetToIdle() {
   pendingStart = null;
-  await chrome.storage.local.set({ status: 'idle', error: '' });
+  await chrome.storage.local.set({ status: 'idle', error: '', permissionLost: false });
   await chrome.storage.session.remove(['waveform', 'elapsedMs']);
   updateBadge('idle');
 }
@@ -96,6 +96,7 @@ async function handleCmd(msg) {
         await forward('setMute', { muted });
         break;
       }
+      case 'recheckPermission': await forward('recheckPermission'); break;
       case 'popOut':       await openPopout(); break;
       default: return { ok: false, error: 'unknown cmd' };
     }
@@ -145,7 +146,7 @@ async function handleEvt(msg) {
       sendStartToOffscreen();
       break;
     case 'status':
-      await chrome.storage.local.set({ status: msg.status, error: msg.error || '' });
+      await chrome.storage.local.set({ status: msg.status, error: msg.error || '', permissionLost: !!msg.permissionLost });
       updateBadge(msg.status);
       if (msg.status === 'error') {
         await showNotification('tab-recorder-error', msg.error, 2);
