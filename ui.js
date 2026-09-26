@@ -1,12 +1,9 @@
-// Shared controller/viewer for both the toolbar popup (default) and the
-// detachable pop-out window (?mode=window). It never assumes recording state —
+// Controller/viewer for the pop-out window. It never assumes recording state —
 // it renders whatever the engine reports in chrome.storage.local, and polls
 // chrome.storage.session for the live waveform/timer.
 
 import { storeHandle, getHandle, M4A_KEY, DIR_KEY } from './idb.js';
 import { isM4aSupported } from './m4a.js';
-
-const isWindow = new URLSearchParams(location.search).get('mode') === 'window';
 
 const $ = (id) => document.getElementById(id);
 const recordBtn    = $('recordBtn');
@@ -14,7 +11,6 @@ const nameInput    = $('nameInput');
 const pauseBtn     = $('pauseBtn');
 const autoPauseBtn = $('autoPauseBtn');
 const muteBtn      = $('muteBtn');
-const popoutBtn    = $('popoutBtn');
 const dot          = $('dot');
 const statusText   = $('statusText');
 const recInfo      = $('recInfo');
@@ -31,10 +27,6 @@ const bars = Array.from({ length: 10 }, () => {
   waveform.appendChild(b);
   return b;
 });
-
-// Always hide pop-out button since we only use pop-out mode now
-popoutBtn.style.display = 'none';
-document.body.classList.add('window-mode');
 
 // Version comes from the manifest — single source of truth, no hardcoding here.
 $('version').textContent = 'v' + chrome.runtime.getManifest().version;

@@ -3,7 +3,7 @@
 // from the offscreen engine into storage writes the UI can read.
 //
 // Three message vocabularies share chrome.runtime:
-//   UI         -> background : { cmd: ... }     (start/stop/pause/resume/setAutoPause/popOut)
+//   UI         -> background : { cmd: ... }     (start/stop/pause/resume/setAutoPause/setMute)
 //   background -> offscreen  : { action: ... }  (startRecordingOffscreen/...)
 //   offscreen  -> background : { evt: ... }     (ready/status/live)
 // Each listener handles only its own shape.
@@ -43,7 +43,7 @@ async function resetToIdle() {
   updateBadge('idle');
 }
 
-// Toolbar badge so recording state is visible without opening the popup.
+// Toolbar badge so recording state is visible without opening the UI.
 function updateBadge(status) {
   const styles = {
     recording:  { text: 'REC', color: '#e53e3e', title: 'Recording — click to manage' },
@@ -97,7 +97,6 @@ async function handleCmd(msg) {
         break;
       }
       case 'recheckPermission': await forward('recheckPermission'); break;
-      case 'popOut':       await openPopout(); break;
       default: return { ok: false, error: 'unknown cmd' };
     }
     return { ok: true };
@@ -254,7 +253,7 @@ async function applyAudibleNow() {
 // ── Pop-out window (persistent, detachable view) ─────────────────────────────
 
 async function openPopout() {
-  const targetUrl = chrome.runtime.getURL('ui.html?mode=window');
+  const targetUrl = chrome.runtime.getURL('ui.html');
   const basePath  = targetUrl.split('?')[0];
   const { popoutWindowId } = await chrome.storage.local.get('popoutWindowId');
 

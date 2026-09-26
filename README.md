@@ -8,12 +8,12 @@ An **M4A (AAC)** copy is saved automatically alongside the WebM — under the sa
 
 - **Tab-locked capture** — recording stays on the tab you started from; switching tabs does not change the source
 - **Crash-safe writes** — full blob committed to disk every ~10 s via `createWritable → write → close`
-- **Detachable window** — pop out the UI to keep status, waveform, and timer visible while working in other tabs
+- **Detached window** — the UI lives in its own window, keeping status, waveform, and timer visible while working in other tabs
 - **Live waveform & timer** — 10-band frequency display and elapsed time (paused time excluded)
 - **Auto-pause** — follows the tab's speaker icon (`tab.audible`); pauses when the tab goes silent, resumes when it plays again
 - **Mute playback** — silence local monitoring without affecting what gets recorded
 - **Automatic M4A export** — live `audio/mp4` encoding during recording, written on every end of recording (with a WebCodecs fallback on older Chrome)
-- **Toolbar badge** — `REC` / `II` / `…` / `!` so state is visible without opening the popup
+- **Toolbar badge** — `REC` / `II` / `…` / `!` so state is visible without opening the UI
 
 ## Requirements
 
@@ -34,18 +34,12 @@ An **M4A (AAC)** copy is saved automatically alongside the WebM — under the sa
 3. Pick the folder to save into. Both `<name>.webm` and `<name>.m4a` are created there up front — the `.m4a` only when the browser supports M4A.
 4. Confirm the `.webm` grows on disk within ~10 s, the waveform animates, the timer counts, and you still hear the tab.
 5. Use **Pause**, **Auto-pause**, or **Mute playback** as needed.
-6. Optionally click **Pop out** to keep the UI visible in a separate window.
-7. Click **Stop & Save** when finished — both files are finalized automatically, no further prompts.
-8. Open the `.webm` and `.m4a` in Chrome, VLC, or another player to verify playback.
+6. Click **Stop & Save** when finished — both files are finalized automatically, no further prompts.
+7. Open the `.webm` and `.m4a` in Chrome, VLC, or another player to verify playback.
 
 ### Which tab gets recorded?
 
-| UI context | Target tab |
-|---|---|
-| Toolbar popup | Active tab of the **current** window |
-| Pop-out window (`?mode=window`) | Active tab of the **last focused normal** browser window |
-
-Focus the tab you want before starting. In pop-out mode, the recorder window itself is not the capture target.
+The UI window records the active tab of the **last focused normal** browser window — the recorder window itself is never the capture target. Focus the tab you want before starting.
 
 ### Tab close & crashes
 
@@ -54,13 +48,13 @@ Focus the tab you want before starting. In pop-out mode, the recorder window its
 
 ## UI states
 
-The popup and pop-out window are pure viewers — they render only what the engine reports in `chrome.storage.local`. Closing the UI does not stop a recording.
+The UI window is a pure viewer — it renders only what the engine reports in `chrome.storage.local`. Closing the UI does not stop a recording.
 
 **Write permission is tied to the UI window that granted it.** If you close that window mid-recording, the engine keeps recording in memory but can no longer flush to disk (Chrome revokes the grant with the window). Reopen the UI and click **Reconnect save folder** to re-grant access and resume disk writes; **Stop & Save** re-grants automatically.
 
 | State | Dot | Status text | Primary button | Other controls |
 |---|---|---|---|---|
-| Idle | green | Ready | Start Recording | Pop out (popup only) |
+| Idle | green | Ready | Start Recording | — |
 | Recording | red pulse | Recording… | Stop & Save | Pause, Auto-pause, Mute playback |
 | Paused | orange | Paused | Stop & Save | Resume, Auto-pause, Mute playback |
 | Converting | orange | Converting to M4A… | Converting… (disabled) | hidden |
@@ -92,11 +86,11 @@ The `.m4a` destination is created at **start**, in the same folder and under the
 
 ## Architecture
 
-The **offscreen document** is the recording engine (stream, MediaRecorder, file handles, disk commits). The **service worker** is the only context that touches `chrome.storage` — offscreen documents have `chrome.runtime` and IndexedDB only. The popup and pop-out window send commands and read storage; they never own recording state directly.
+The **offscreen document** is the recording engine (stream, MediaRecorder, file handles, disk commits). The **service worker** is the only context that touches `chrome.storage` — offscreen documents have `chrome.runtime` and IndexedDB only. The UI window sends commands and reads storage; it never owns recording state directly.
 
 ```
-[ ui.html (popup) | ui.html?mode=window (pop-out) ]     ui.js / ui.css
-        │  { cmd } start | stop | pause | resume | setAutoPause | setMute | popOut
+[ ui.html (pop-out window) ]     ui.js / ui.css
+        │  { cmd } start | stop | pause | resume | setAutoPause | setMute
         │  reads chrome.storage.local + session
         ▼
    background.js  (service worker — storage, offscreen lifecycle, tab-close watch)
@@ -152,13 +146,13 @@ Disconnects `source` from `AudioContext.destination` only. The `MediaRecorder` a
 ```
 tab-recorder/
 ├── manifest.json      MV3 manifest (tabCapture, offscreen, storage, tabs) — version source of truth
-├── CHANGELOG.md       Version history (popup shows the manifest version)
+├── CHANGELOG.md       Version history (UI shows the manifest version)
 ├── background.js      Service worker: routing, storage, offscreen lifecycle
 ├── offscreen.html     Offscreen document shell
 ├── offscreen.js       Recording engine
 ├── m4a.js             M4A fallback encoder (WebCodecs + mp4-muxer)
 ├── mp4-muxer.mjs      Vendored MP4/M4A muxer (mp4-muxer 5.2.2)
-├── ui.html            Shared UI (popup + pop-out)
+├── ui.html            UI window (ui.js / ui.css)
 ├── ui.js              Controller / viewer
 ├── ui.css             Dark-theme styles
 ├── idb.js             IndexedDB store for FileSystemFileHandle(s)
