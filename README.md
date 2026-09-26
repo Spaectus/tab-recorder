@@ -31,7 +31,7 @@ An **M4A (AAC)** copy is saved automatically alongside the WebM — under the sa
 
 1. Play audio in the tab you want to record.
 2. Click the extension icon, optionally type a recording name (default: `recording_<timestamp>`), then click **Start Recording**.
-3. Pick the folder to save into. Both `<name>.webm` and `<name>.m4a` are created there up front.
+3. Pick the folder to save into. Both `<name>.webm` and `<name>.m4a` are created there up front — the `.m4a` only when the browser supports M4A.
 4. Confirm the `.webm` grows on disk within ~10 s, the waveform animates, the timer counts, and you still hear the tab.
 5. Use **Pause**, **Auto-pause**, or **Mute playback** as needed.
 6. Optionally click **Pop out** to keep the UI visible in a separate window.
@@ -80,7 +80,7 @@ While recording or paused, a second line shows `Recording: <tab title> · HH:MM:
 
 ## Automatic M4A export
 
-The `.m4a` destination is created at **start**, in the same folder and under the same base name as the `.webm`. When the recording ends — for any reason — the M4A is written automatically, with no dialog.
+The `.m4a` destination is created at **start**, in the same folder and under the same base name as the `.webm` — but only when the browser supports M4A, so no empty `.m4a` appears on browsers that don't. When the recording ends — for any reason — the M4A is written automatically, with no dialog.
 
 1. **During recording**, a second `MediaRecorder` encodes the same stream to `audio/mp4;codecs=mp4a.40.2` (AAC-LC, 128 kbps) and buffers chunks. It runs **continuously** and is never paused — MP4 tolerates pause/resume gaps poorly, and a complete file matters more than mirroring the WebM's skipped spans.
 2. The `.m4a` handle is created via the directory picked at start and stored in IndexedDB under a separate key (`m4aFileHandle`).
@@ -115,7 +115,7 @@ Three message vocabularies share `chrome.runtime`: UI uses `{ cmd }`, background
 
 **Stale-state recovery:** on install and browser startup, if storage says `recording` or `paused` but no offscreen document exists, the service worker resets to idle. This prevents a wedged "Stop & Save" UI after an extension reload or service-worker sleep.
 
-**File handles:** the UI calls `showDirectoryPicker()` once at start and creates `<name>.webm` and `<name>.m4a` in the chosen folder. `FileSystemHandle`s cannot cross extension message boundaries, so the UI stores the directory + both file handles in IndexedDB ([idb.js](idb.js)); the offscreen engine reads them back. A later click (pause/stop) re-requests write permission on the **directory**, covering both files at once.
+**File handles:** the UI calls `showDirectoryPicker()` once at start and creates `<name>.webm` and — when the browser supports M4A — `<name>.m4a` in the chosen folder. `FileSystemHandle`s cannot cross extension message boundaries, so the UI stores the directory + both file handles in IndexedDB ([idb.js](idb.js)); the offscreen engine reads them back. A later click (pause/stop) re-requests write permission on the **directory**, covering both files at once.
 
 ### Recording pipeline
 

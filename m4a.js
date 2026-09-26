@@ -14,6 +14,23 @@ import { Muxer, ArrayBufferTarget } from './mp4-muxer.mjs';
 
 export const AAC_BITRATE     = 128_000; // bits/s for the AAC encode
 export const AAC_SAMPLE_RATE = 48_000;  // decode/encode rate (tab audio is native 48k Opus)
+export const M4A_MIME        = 'audio/mp4;codecs=mp4a.40.2'; // AAC-LC in MP4
+
+// Capability check shared by the UI (decides whether to create the .m4a
+// destination) and the offscreen engine (decides whether to run the live
+// audio/mp4 recorder). Static browser capability — same result everywhere.
+export async function isM4aSupported() {
+  if (typeof MediaRecorder === 'undefined' || typeof AudioEncoder === 'undefined') return false;
+  if (!MediaRecorder.isTypeSupported(M4A_MIME)) return false;
+  try {
+    const supported = await AudioEncoder.isConfigSupported({
+      codec: 'mp4a.40.2', sampleRate: 48000, numberOfChannels: 2,
+    });
+    return supported?.supported === true;
+  } catch {
+    return false;
+  }
+}
 
 // Encode a decoded AudioBuffer to a complete .m4a file. Resolves to an
 // ArrayBuffer holding the MP4 bytes. Throws (loudly) if WebCodecs AAC is
