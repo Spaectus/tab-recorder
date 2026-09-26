@@ -175,6 +175,26 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   line-height: 1.4;
 }
 
+.perm-lost {
+  display: none;
+  font-size: 11px;
+  color: #f6ad55;
+  background: #3d2e1d;
+  border: 1px solid #f6ad55;
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+#reconnectBtn {
+  background: #2d3748;
+  color: #f6ad55;
+  border: 1px solid #f6ad55;
+  font-size: 12px;
+  margin-top: 6px;
+}
+#reconnectBtn:not(:disabled):hover { background: #3d4a5c; }
+
 .version {
   font-size: 9px;
   color: #4a5568;

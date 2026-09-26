@@ -47,6 +47,7 @@ let pauseStartedAt = 0;  // start of the current pause (0 when not paused)
 let committing = false;
 let stopping = false;
 let active = false;      // a recording session is live or being set up
+let permissionLost = false; // write grant died with the UI window that requested it
 
 let m4aSupported = false; // set by checkM4aSupport on load
 
@@ -62,6 +63,7 @@ chrome.runtime.onMessage.addListener((msg) => {
     case 'autoPause':   if (!manuallyPaused && !autoPaused) doAutoPause(); break;
     case 'autoResume':  if (autoPaused) doAutoResume();                    break;
     case 'setMute':     setMute(!!msg.muted);                              break;
+    case 'recheckPermission': recheckPermission();                         break;
   }
 });
 
@@ -91,7 +93,7 @@ sendEvt({ evt: 'ready' });
 
 function sendEvt(payload)            { chrome.runtime.sendMessage(payload).catch(() => {}); }
 function sendStatus(status, error = '', extra = {}) {
-  sendEvt({ evt: 'status', status, error: error || '', ...extra });
+  sendEvt({ evt: 'status', status, error: error || '', permissionLost, ...extra });
 }
 function sendLive(waveform, elapsed) { sendEvt({ evt: 'live', waveform, elapsedMs: elapsed }); }
 
@@ -217,9 +219,16 @@ async function stop(convertM4a = true) {
   console.log('[offscreen] stop: convertM4a=%s liveBytes=%d webmChunks=%d',
     convertM4a, m4aBlob ? m4aBlob.size : 0, chunks.length);
 
-  // Final WebM flush. On failure, commit() routes through fail(), which
-  // salvages the M4A and reports the error — nothing left to do here.
-  if (!await commit({ force: true })) return;
+  // Final WebM flush. On failure, commit() routes through fail() or
+  // handlePermissionLost() — nothing left to do here.
+  if (!await commit({ force: true })) {
+    // A permission loss at stop time is terminal: there is no UI left to
+    // re-grant (stop is a final action), so fail with a clear message.
+    if (permissionLost) {
+      await fail('Saving failed: write permission to the output file was lost. Recording stopped. Re-select a save location to start again.');
+    }
+    return;
+  }
 
   teardownMedia();
 
@@ -441,9 +450,12 @@ async function commit({ force = false } = {}) {
   } catch (e) {
     committing = false;
     const msg = e?.message || String(e);
-    // Surface a user-friendly notice instead of raw DOMException.
+    // Permission loss is not fatal: the grant is tied to the UI window that
+    // requested it, so closing that window mid-recording revokes it. Keep the
+    // recording alive in memory and wait for the UI to re-grant (see
+    // handlePermissionLost / recheckPermission).
     if (/user activation|permission lost|write permission/i.test(msg)) {
-      await fail('Saving failed: write permission to the output file was lost. Recording stopped. Re-select a save location to start again.');
+      await handlePermissionLost();
     } else {
       await fail('Saving failed: ' + msg);
     }
@@ -451,6 +463,34 @@ async function commit({ force = false } = {}) {
   }
   committing = false;
   return true;
+}
+
+// ── Permission loss (UI window closed mid-recording) ─────────────────────────
+
+// The write grant is tied to the UI document that requested it (popup /
+// pop-out window). If that window closes mid-recording, the grant dies with it
+// and this offscreen engine cannot re-grant headless (no user gesture). Instead
+// of failing the recording, keep it alive in memory and wait for the UI to
+// re-grant (user gesture) and send 'recheckPermission'.
+// ponytail: chunks accumulate in RAM while waiting (~1 MB/min at 128 kbps);
+// acceptable for typical sessions, revisit if multi-hour headless recordings matter.
+async function handlePermissionLost() {
+  if (permissionLost) return;
+  permissionLost = true;
+  clearInterval(commitTimer); commitTimer = null;
+  console.warn('[offscreen] write permission lost — recording continues in memory until the UI re-grants access');
+  sendStatus((manuallyPaused || autoPaused) ? 'paused' : 'recording');
+}
+
+async function recheckPermission() {
+  if (!fileHandle || !fileHandle.queryPermission) return;
+  const perm = await fileHandle.queryPermission({ mode: 'readwrite' });
+  if (perm !== 'granted') return; // still waiting for the user to re-grant
+  permissionLost = false;
+  const paused = manuallyPaused || autoPaused;
+  sendStatus(paused ? 'paused' : 'recording');
+  if (!paused && !commitTimer) commitTimer = setInterval(commit, COMMIT_INTERVAL);
+  await commit({ force: true });
 }
 
 // ── Teardown ─────────────────────────────────────────────────────────────────
@@ -468,6 +508,7 @@ function teardownMedia() {
   muted = false;
   pausedAccumMs = 0; pauseStartedAt = 0;
   active = false;
+  permissionLost = false;
 }
 
 function tryCall(fn) { try { fn(); } catch { /* ignore teardown errors */ } }
